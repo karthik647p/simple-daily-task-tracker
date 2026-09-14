@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="theme-color" content="#3b82f6" />
+<title>Simple Daily Task Tracker</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>✅</text></svg>" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+
+  <header class="app-header">
+    <h1 id="appTitle">Simple Daily Task Tracker</h1>
+  </header>
+
+  <!-- TRACK VIEW -->
+  <main id="view-track" class="view">
+    <div class="period-nav">
+      <button class="nav-arrow" id="prevWeek" aria-label="Previous week">‹</button>
+      <div class="period-label" id="weekLabel">This week</div>
+      <button class="nav-arrow" id="nextWeek" aria-label="Next week">›</button>
+    </div>
+    <div class="grid-wrap">
+      <table id="trackGrid"></table>
+    </div>
+    <p class="legend">
+      <span class="legend-dot done"></span> Done
+      &nbsp;&nbsp;<span class="legend-dot missed"></span> Missed
+      &nbsp;&nbsp;Tap any square to set it
+    </p>
+    <div id="emptyStateTrack" class="empty-state hidden">
+      <p>No activities yet.</p>
+      <button class="btn-primary" id="goSetupBtn">Add your first activity</button>
+    </div>
+  </main>
+
+  <!-- DASHBOARD VIEW -->
+  <main id="view-dashboard" class="view hidden">
+    <div class="period-toggle">
+      <button class="toggle-btn" data-period="day" id="toggleDay">Daily</button>
+      <button class="toggle-btn active" data-period="week" id="toggleWeek">Weekly</button>
+      <button class="toggle-btn" data-period="month" id="toggleMonth">Monthly</button>
+    </div>
+    <div class="period-nav">
+      <button class="nav-arrow" id="prevPeriodDash" aria-label="Previous period">‹</button>
+      <div class="period-label" id="dashPeriodLabel">This week</div>
+      <button class="nav-arrow" id="nextPeriodDash" aria-label="Next period">›</button>
+    </div>
+
+    <div class="stat-cards">
+      <div class="stat-card">
+        <div class="stat-value" id="statPeriodPoints">0</div>
+        <div class="stat-label" id="statPeriodLabel">earned this period</div>
+      </div>
+      <div class="stat-card redeemed">
+        <div class="stat-value" id="statRedeemedPoints">0</div>
+        <div class="stat-label" id="statRedeemedLabel">redeemed this period</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statTotalPoints">0</div>
+        <div class="stat-label">total accumulated</div>
+      </div>
+    </div>
+
+    <h2 class="section-title">By activity</h2>
+    <div id="activityBreakdown" class="breakdown-list"></div>
+
+    <div id="dayBreakdownWrap">
+      <h2 class="section-title">By day</h2>
+      <div id="dayBreakdown" class="day-breakdown-list"></div>
+    </div>
+  </main>
+
+  <!-- SETTINGS VIEW -->
+  <main id="view-settings" class="view hidden">
+    <h2 class="section-title">Activities <span id="activityCount" class="count-badge">0/10</span></h2>
+    <p class="hint">Set a name and points for each activity. Points are added to your total whenever you mark it done.</p>
+    <div id="activityList" class="activity-list"></div>
+    <button class="btn-primary btn-block" id="addActivityBtn">+ Add activity</button>
+
+    <h2 class="section-title" style="margin-top:28px">Data</h2>
+    <p class="hint">Your data is saved only on this device (browser local storage).</p>
+    <button class="btn-secondary btn-block" id="exportBtn">Export backup (.json)</button>
+    <label class="btn-secondary btn-block file-label" id="importLabel">
+      Import backup (.json)
+      <input type="file" id="importInput" accept="application/json" hidden />
+    </label>
+    <button class="btn-danger btn-block" id="resetBtn">Reset all data</button>
+  </main>
+
+  <nav class="bottom-nav">
+    <button class="nav-btn active" data-view="track"><span class="nav-icon">📋</span><span>Track</span></button>
+    <button class="nav-btn" data-view="dashboard"><span class="nav-icon">📊</span><span>Dashboard</span></button>
+    <button class="nav-btn" data-view="settings"><span class="nav-icon">⚙️</span><span>Settings</span></button>
+  </nav>
+
+  <!-- CELL MODAL -->
+  <div id="modalOverlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title" id="modalActivityName">Activity</div>
+      <div class="modal-date" id="modalDateLabel">Date</div>
+
+      <div class="modal-actions-row">
+        <button class="btn-done" id="modalDoneBtn">✓ Done</button>
+        <button class="btn-missed" id="modalMissedBtn">✗ Missed</button>
+      </div>
+
+      <div id="commentSection" class="comment-section hidden">
+        <label for="commentInput">Comment (optional)</label>
+        <input type="text" id="commentInput" maxlength="30" placeholder="e.g. lesson 15" />
+        <button class="btn-primary btn-block" id="saveCommentBtn">Save</button>
+      </div>
+
+      <button class="btn-clear-cell hidden" id="clearCellBtn">Clear this entry</button>
+      <button class="btn-cancel" id="modalCancelBtn">Cancel</button>
+    </div>
+  </div>
+
+  <!-- ACTIVITY EDIT MODAL -->
+  <div id="activityModalOverlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title" id="activityModalTitle">Edit activity</div>
+      <label class="field-label" for="activityNameInput">Name</label>
+      <input type="text" id="activityNameInput" maxlength="15" placeholder="e.g. Drawing class" />
+      <label class="field-label" for="activityPointsInput">Points when done</label>
+      <input type="number" id="activityPointsInput" min="0" max="100" step="1" placeholder="e.g. 3" />
+      <div class="time-row">
+        <div>
+          <label class="field-label" for="activityStartInput">Start time (optional)</label>
+          <input type="time" id="activityStartInput" />
+        </div>
+        <div>
+          <label class="field-label" for="activityEndInput">End time (optional)</label>
+          <input type="time" id="activityEndInput" />
+        </div>
+      </div>
+      <button class="btn-primary btn-block" id="saveActivityBtn">Save</button>
+      <button class="btn-danger btn-block" id="deleteActivityBtn">Delete activity</button>
+      <button class="btn-cancel" id="activityModalCancelBtn">Cancel</button>
+    </div>
+  </div>
+
+  <!-- REDEEM MODAL -->
+  <div id="redeemModalOverlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title">Redeem points</div>
+      <div class="modal-date" id="redeemDateLabel">Date</div>
+      <p class="hint" id="redeemAvailableHint" style="text-align:center">You have 0 pts accumulated</p>
+
+      <label class="field-label" for="redeemPointsInput">Points to redeem</label>
+      <input type="number" id="redeemPointsInput" min="0" step="1" placeholder="e.g. 5" />
+
+      <label class="field-label" for="redeemCommentInput">Comment (optional)</label>
+      <input type="text" id="redeemCommentInput" maxlength="30" placeholder="e.g. toy car" />
+
+      <button class="btn-primary btn-block" id="saveRedeemBtn">Save</button>
+      <button class="btn-clear-cell hidden" id="clearRedeemBtn">Clear this entry</button>
+      <button class="btn-cancel" id="redeemModalCancelBtn">Cancel</button>
+    </div>
+  </div>
+
+  <!-- GENERIC CONFIRM / MESSAGE MODAL -->
+  <div id="confirmModalOverlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title" id="confirmModalTitle">Are you sure?</div>
+      <div class="modal-date" id="confirmModalMessage"></div>
+      <button class="btn-danger btn-block" id="confirmModalConfirmBtn">Yes</button>
+      <button class="btn-cancel" id="confirmModalCancelBtn">Cancel</button>
+    </div>
+  </div>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>

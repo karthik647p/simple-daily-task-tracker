@@ -1,0 +1,13 @@
+# OS junk files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# Local env/secrets (none currently used by this app, but keep out by default)
+.env
+.env.*
+*.local

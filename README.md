@@ -1,6 +1,6 @@
 # Simple Daily Task Tracker
 
-A dead-simple, mobile-friendly app for tracking daily tasks. No sign-up, no backend, no build step — just open it and tap. It started as a way to track a kid's daily routine (piano practice, chores, reading) with a points-based reward system, but it works for tracking any recurring daily activity you want to build a habit around.
+A very-simple, mobile-friendly app for tracking daily tasks. No sign-up, no backend, no build step — just open it and tap. It started as a way to track a kid's daily routine (piano practice, chores, reading) with a points-based reward system, but it works for tracking any recurring daily activity you want to build a habit around.
 
 ## Why this exists
 

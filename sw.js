@@ -1,4 +1,4 @@
-var CACHE_NAME = "simple-daily-task-tracker-v1";
+var CACHE_NAME = "simple-daily-task-tracker-v2";
 var CORE_ASSETS = [
   "./",
   "./index.html",
@@ -30,18 +30,20 @@ self.addEventListener("activate", function (event) {
   self.clients.claim();
 });
 
+// Network first so app updates show up on the next open; the cache is only the offline fallback.
 self.addEventListener("fetch", function (event) {
   if (event.request.method !== "GET") return;
   event.respondWith(
-    caches.match(event.request).then(function (cached) {
-      var network = fetch(event.request).then(function (response) {
-        if (response && response.status === 200 && response.type === "basic") {
-          var copy = response.clone();
-          caches.open(CACHE_NAME).then(function (cache) { cache.put(event.request, copy); });
-        }
-        return response;
-      }).catch(function () { return cached; });
-      return cached || network;
+    fetch(event.request, { cache: "no-cache" }).then(function (response) {
+      if (response && response.status === 200 && response.type === "basic") {
+        var copy = response.clone();
+        caches.open(CACHE_NAME).then(function (cache) { cache.put(event.request, copy); });
+      }
+      return response;
+    }).catch(function () {
+      return caches.match(event.request).then(function (cached) {
+        return cached || caches.match("./index.html");
+      });
     })
   );
 });

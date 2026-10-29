@@ -6,6 +6,11 @@
   var DAY_NAMES = ["S", "M", "T", "W", "T", "F", "S"];
   var MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   var WEEKDAY_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  var DEFAULT_RULES = ["Sample Rule 1", "Sample Rule 2"];
+  var MAX_RULES = 100;
+  var MAX_RULE_LENGTH = 300;
+  var MAX_ADJUST_POINTS = 1000000;
+  var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
   // ---------------- storage ----------------
   function defaultState() {
@@ -17,13 +22,65 @@
       ],
       archivedActivities: [],
       entries: {}, // "YYYY-MM-DD" -> { activityId: { status: "done"|"missed", comment: "", points: number } }
-      redemptions: {} // "YYYY-MM-DD" -> { points: number, comment: "" }
+      adjustments: [], // { id, date: "YYYY-MM-DD", ts: ISO string | null, amount: signed number, comment }
+      rules: DEFAULT_RULES.slice()
     };
   }
 
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
+
+  function cleanAdjustment(a) {
+    if (!a || typeof a !== "object" || typeof a.date !== "string" || !DATE_RE.test(a.date)) return null;
+    var amount = Number(a.amount);
+    if (!isFinite(amount) || amount === 0) return null;
+    return {
+      id: typeof a.id === "string" && a.id ? a.id : uid(),
+      date: a.date,
+      ts: typeof a.ts === "string" ? a.ts : null,
+      amount: amount,
+      comment: typeof a.comment === "string" ? a.comment : ""
+    };
+  }
+
+  // Brings any saved/imported data up to the current shape. Old "redemptions" (one per day, positive
+  // points deducted) become negative adjustments, then the old field is removed so nothing is counted twice.
+  function migrateState(s) {
+    if (!Array.isArray(s.archivedActivities)) s.archivedActivities = [];
+
+    var adjustments = [];
+    if (Array.isArray(s.adjustments)) {
+      s.adjustments.forEach(function (a) {
+        var c = cleanAdjustment(a);
+        if (c) adjustments.push(c);
+      });
+    }
+    if (s.redemptions && typeof s.redemptions === "object") {
+      Object.keys(s.redemptions).forEach(function (dateStr) {
+        var r = s.redemptions[dateStr];
+        var pts = r ? Number(r.points) : 0;
+        var id = "migrated-" + dateStr;
+        var already = adjustments.some(function (a) { return a.id === id; });
+        if (!already && DATE_RE.test(dateStr) && isFinite(pts) && pts > 0) {
+          adjustments.push({ id: id, date: dateStr, ts: null, amount: -pts, comment: r.comment ? String(r.comment) : "" });
+        }
+      });
+    }
+    delete s.redemptions;
+    s.adjustments = adjustments;
+
+    var rules = [];
+    if (Array.isArray(s.rules)) {
+      s.rules.forEach(function (r) {
+        if (typeof r === "string" && r.trim()) rules.push(r.trim());
+      });
+    }
+    s.rules = rules.length ? rules : DEFAULT_RULES.slice();
+    return s;
+  }
+
+  var migratedOnLoad = false;
 
   function loadState() {
     try {
@@ -33,8 +90,9 @@
       if (!parsed || !Array.isArray(parsed.activities) || typeof parsed.entries !== "object") {
         return defaultState();
       }
-      if (!Array.isArray(parsed.archivedActivities)) parsed.archivedActivities = [];
-      if (!parsed.redemptions || typeof parsed.redemptions !== "object") parsed.redemptions = {};
+      var before = JSON.stringify(parsed);
+      migrateState(parsed);
+      migratedOnLoad = JSON.stringify(parsed) !== before;
       return parsed;
     } catch (e) {
       return defaultState();
@@ -46,6 +104,7 @@
   }
 
   var state = loadState();
+  if (migratedOnLoad) saveState();
 
   // ---------------- date helpers ----------------
   function pad(n) { return n < 10 ? "0" + n : "" + n; }
@@ -112,7 +171,8 @@
     dashMonth: new Date().getMonth(),
     modalTarget: null, // { activityId, dateStr }
     editingActivityId: null,
-    redeemTarget: null // dateStr
+    adjustTarget: null, // { dateStr, dateObj }
+    adjustDirection: null // "earn" | "redeem"
   };
 
   // ---------------- activity lookup ----------------
@@ -170,32 +230,57 @@
     return total;
   }
 
-  function getRedemption(dateStr) {
-    return state.redemptions[dateStr] || null;
+  // ---------------- adjustments (manual +/- points) ----------------
+  function adjustmentsForDate(dateStr) {
+    return state.adjustments.filter(function (a) { return a.date === dateStr; }).sort(function (x, y) {
+      var tx = x.ts || "";
+      var ty = y.ts || "";
+      return tx < ty ? -1 : (tx > ty ? 1 : 0);
+    });
   }
 
-  function setRedemption(dateStr, entry) {
-    if (entry === null) {
-      delete state.redemptions[dateStr];
-    } else {
-      state.redemptions[dateStr] = entry;
-    }
+  function addAdjustment(dateStr, amount, comment) {
+    state.adjustments.push({ id: uid(), date: dateStr, ts: new Date().toISOString(), amount: amount, comment: comment });
     saveState();
   }
 
-  function dayRedeemedPoints(dateStr) {
-    var r = state.redemptions[dateStr];
-    return r ? Number(r.points) || 0 : 0;
+  function removeAdjustment(id) {
+    state.adjustments = state.adjustments.filter(function (a) { return a.id !== id; });
+    saveState();
   }
 
+  function dayAdjustmentTotal(dateStr) {
+    var total = 0;
+    state.adjustments.forEach(function (a) {
+      if (a.date === dateStr) total += a.amount;
+    });
+    return total;
+  }
+
+  function formatSigned(n) {
+    return n > 0 ? "+" + n : "" + n;
+  }
+
+  function formatAdjustTime(ts) {
+    if (!ts) return "";
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+
+  function signClass(n) {
+    return n > 0 ? "adj-pos" : (n < 0 ? "adj-neg" : "adj-zero");
+  }
+
+  // Available Points = earned points + sum of all adjustments (no separate redeemed total anywhere)
   function dayNetPoints(dateStr) {
-    return dayEarnedPoints(dateStr) - dayRedeemedPoints(dateStr);
+    return dayEarnedPoints(dateStr) + dayAdjustmentTotal(dateStr);
   }
 
   function allDatesWithData() {
     var dates = {};
     Object.keys(state.entries).forEach(function (d) { dates[d] = true; });
-    Object.keys(state.redemptions).forEach(function (d) { dates[d] = true; });
+    state.adjustments.forEach(function (a) { dates[a.date] = true; });
     return Object.keys(dates);
   }
 
@@ -271,31 +356,31 @@
       table.appendChild(tr);
     });
 
-    // redeemed summary row (right after the activities)
-    var redeemTr = document.createElement("tr");
-    redeemTr.className = "redeem-row";
-    var redeemLabelTd = document.createElement("td");
-    redeemLabelTd.className = "redeem-row-label";
-    redeemLabelTd.textContent = "Redeemed";
-    redeemTr.appendChild(redeemLabelTd);
+    // adjusted summary row (right after the activities): net of the day's manual +/- adjustments
+    var adjustTr = document.createElement("tr");
+    adjustTr.className = "adjust-row";
+    var adjustLabelTd = document.createElement("td");
+    adjustLabelTd.className = "adjust-row-label";
+    adjustLabelTd.textContent = "Adjusted";
+    adjustTr.appendChild(adjustLabelTd);
     days.forEach(function (d) {
       var dateStr = fmtDate(d);
       var isToday = sameDate(d, today);
       var td = document.createElement("td");
       td.className = "day-cell" + (isToday ? " today-col" : "");
-      var r = getRedemption(dateStr);
-      if (r && r.points) {
-        td.classList.add("has-redeem");
-        td.innerHTML = '<span>-' + r.points + '</span>';
+      if (adjustmentsForDate(dateStr).length) {
+        var net = dayAdjustmentTotal(dateStr);
+        td.classList.add("has-adjust", signClass(net));
+        td.innerHTML = '<span>' + formatSigned(net) + '</span>';
       } else {
         td.innerHTML = '<span class="dim">–</span>';
       }
       td.addEventListener("click", function () {
-        openRedeemModal(dateStr, d);
+        openAdjustModal(dateStr, d);
       });
-      redeemTr.appendChild(td);
+      adjustTr.appendChild(td);
     });
-    table.appendChild(redeemTr);
+    table.appendChild(adjustTr);
 
     // earned summary row
     var pointsTr = document.createElement("tr");
@@ -387,42 +472,172 @@
     renderAll();
   }
 
-  // ---------------- redeem modal ----------------
-  function openRedeemModal(dateStr, dateObj) {
-    ui.redeemTarget = dateStr;
-    var existing = getRedemption(dateStr);
-    document.getElementById("redeemDateLabel").textContent = dateObj.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
-    var available = accumulatedAsOf(dateStr) + (existing ? existing.points : 0);
-    document.getElementById("redeemAvailableHint").textContent = "You have " + available + " pts accumulated so far.";
-    document.getElementById("redeemPointsInput").value = existing ? existing.points : "";
-    document.getElementById("redeemCommentInput").value = existing && existing.comment ? existing.comment : "";
-    document.getElementById("clearRedeemBtn").classList.toggle("hidden", !existing);
-    document.getElementById("redeemModalOverlay").classList.remove("hidden");
+  // ---------------- adjust modal ----------------
+  function openAdjustModal(dateStr, dateObj) {
+    ui.adjustTarget = { dateStr: dateStr, dateObj: dateObj };
+    ui.adjustDirection = null;
+    document.getElementById("adjustDateLabel").textContent = dateObj.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+    document.getElementById("adjustInputSection").classList.add("hidden");
+    document.getElementById("adjustPointsInput").value = "";
+    document.getElementById("adjustCommentInput").value = "";
+    document.getElementById("adjustEarnBtn").classList.remove("dim");
+    document.getElementById("adjustRedeemBtn").classList.remove("dim");
+    refreshAdjustModal();
+    document.getElementById("adjustModalOverlay").classList.remove("hidden");
   }
 
-  function closeRedeemModal() {
-    document.getElementById("redeemModalOverlay").classList.add("hidden");
-    ui.redeemTarget = null;
+  function refreshAdjustModal() {
+    var t = ui.adjustTarget;
+    if (!t) return;
+    document.getElementById("adjustBalanceHint").textContent = "Balance as of this date: " + accumulatedAsOf(t.dateStr) + " pts";
+
+    var listEl = document.getElementById("adjustHistory");
+    listEl.innerHTML = "";
+    adjustmentsForDate(t.dateStr).forEach(function (a) {
+      var row = document.createElement("div");
+      row.className = "adjust-history-item";
+      var meta = [];
+      meta.push(a.amount > 0 ? "Earned" : "Redeemed");
+      if (a.comment) meta.push(escapeHtml(a.comment));
+      var time = formatAdjustTime(a.ts);
+      if (time) meta.push(time);
+      row.innerHTML =
+        '<span class="adjust-history-amount ' + signClass(a.amount) + '">' + formatSigned(a.amount) + '</span>' +
+        '<span class="adjust-history-meta">' + meta.join(" · ") + '</span>';
+      var removeBtn = document.createElement("button");
+      removeBtn.className = "adjust-history-remove";
+      removeBtn.textContent = "Remove";
+      removeBtn.addEventListener("click", function () {
+        showConfirm("Remove adjustment?", "This undoes the " + formatSigned(a.amount) + " pts adjustment and updates the balance.", "Remove", function () {
+          removeAdjustment(a.id);
+          refreshAdjustModal();
+          renderAll();
+        });
+      });
+      row.appendChild(removeBtn);
+      listEl.appendChild(row);
+    });
   }
 
-  function handleSaveRedeem() {
-    if (!ui.redeemTarget) return;
-    var points = Number(document.getElementById("redeemPointsInput").value);
-    if (isNaN(points) || points <= 0) {
-      showMessage("Points needed", "Enter how many points to redeem (more than 0).");
+  function closeAdjustModal() {
+    document.getElementById("adjustModalOverlay").classList.add("hidden");
+    ui.adjustTarget = null;
+    ui.adjustDirection = null;
+  }
+
+  function chooseAdjustDirection(direction) {
+    ui.adjustDirection = direction;
+    document.getElementById("adjustInputSection").classList.remove("hidden");
+    document.getElementById("adjustPointsLabel").textContent = direction === "earn" ? "Points to add" : "Points to deduct";
+    document.getElementById("adjustEarnBtn").classList.toggle("dim", direction !== "earn");
+    document.getElementById("adjustRedeemBtn").classList.toggle("dim", direction !== "redeem");
+    document.getElementById("adjustPointsInput").focus();
+  }
+
+  function handleSaveAdjust() {
+    if (!ui.adjustTarget) return;
+    if (!ui.adjustDirection) {
+      showMessage("Choose a type", "Choose Earn (add points) or Redeem (deduct points) first.");
       return;
     }
-    var comment = document.getElementById("redeemCommentInput").value.trim();
-    setRedemption(ui.redeemTarget, { points: points, comment: comment });
-    closeRedeemModal();
+    var raw = document.getElementById("adjustPointsInput").value.trim();
+    var points = Number(raw);
+    if (raw === "" || !isFinite(points) || Math.floor(points) !== points || points <= 0) {
+      showMessage("Points needed", "Enter a whole number of points greater than 0.");
+      return;
+    }
+    if (points > MAX_ADJUST_POINTS) {
+      showMessage("Too many points", "Enter " + MAX_ADJUST_POINTS + " points or fewer.");
+      return;
+    }
+    var comment = document.getElementById("adjustCommentInput").value.trim().slice(0, 30);
+    addAdjustment(ui.adjustTarget.dateStr, ui.adjustDirection === "earn" ? points : -points, comment);
+    closeAdjustModal();
     renderAll();
   }
 
-  function handleClearRedeem() {
-    if (!ui.redeemTarget) return;
-    setRedemption(ui.redeemTarget, null);
-    closeRedeemModal();
-    renderAll();
+  // ---------------- admin: rules ----------------
+  function ruleKey(s) {
+    return s.replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  // One rule per line. A leading "3. " or "3) " typed by the admin is ignored because numbering is automatic.
+  function parseRulesText(text) {
+    var rules = [];
+    var seen = {};
+    var lines = text.split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+      var t = lines[i].replace(/^\s*\d+\s*[.)]\s+/, "").trim();
+      if (!t) continue;
+      if (t.length > MAX_RULE_LENGTH) {
+        return { error: "Rule " + (rules.length + 1) + " is too long (maximum " + MAX_RULE_LENGTH + " characters)." };
+      }
+      var key = ruleKey(t);
+      if (seen[key]) return { error: "Duplicate rule: \"" + t + "\". Remove or reword it." };
+      seen[key] = true;
+      rules.push(t);
+    }
+    if (rules.length === 0) return { error: "Add at least one rule." };
+    if (rules.length > MAX_RULES) return { error: "You can have up to " + MAX_RULES + " rules." };
+    return { rules: rules };
+  }
+
+  function renderAdmin() {
+    var listEl = document.getElementById("rulesList");
+    listEl.innerHTML = "";
+    state.rules.forEach(function (rule) {
+      var li = document.createElement("li");
+      li.textContent = rule;
+      listEl.appendChild(li);
+    });
+    document.getElementById("rulesCount").textContent = state.rules.length;
+  }
+
+  function openRulesModal() {
+    document.getElementById("rulesTextarea").value = state.rules.join("\n");
+    document.getElementById("rulesError").classList.add("hidden");
+    document.getElementById("rulesModalOverlay").classList.remove("hidden");
+    document.getElementById("rulesTextarea").focus();
+  }
+
+  function closeRulesModal() {
+    document.getElementById("rulesModalOverlay").classList.add("hidden");
+  }
+
+  function handleSaveRules() {
+    var errorEl = document.getElementById("rulesError");
+    var result = parseRulesText(document.getElementById("rulesTextarea").value);
+    if (result.error) {
+      errorEl.textContent = result.error;
+      errorEl.classList.remove("hidden");
+      return;
+    }
+    errorEl.classList.add("hidden");
+
+    var newKeys = {};
+    result.rules.forEach(function (r) { newKeys[ruleKey(r)] = true; });
+    var removed = state.rules.filter(function (r) { return !newKeys[ruleKey(r)]; });
+
+    function apply() {
+      state.rules = result.rules;
+      saveState();
+      closeRulesModal();
+      renderAll();
+    }
+
+    if (removed.length) {
+      var sample = removed.slice(0, 3).map(function (r) {
+        return "\"" + (r.length > 40 ? r.slice(0, 40) + "…" : r) + "\"";
+      }).join(", ");
+      showConfirm(
+        "Change existing rules?",
+        removed.length + " existing rule" + (removed.length === 1 ? " is" : "s are") + " changed or removed: " + sample + (removed.length > 3 ? ", …" : "") + ".",
+        "Save changes",
+        apply
+      );
+    } else {
+      apply();
+    }
   }
 
   // ---------------- dashboard ----------------
@@ -446,23 +661,23 @@
     return "earned this month";
   }
 
-  function periodRedeemedLabel() {
-    if (ui.dashPeriod === "day") return "redeemed this day";
-    if (ui.dashPeriod === "week") return "redeemed this week";
-    return "redeemed this month";
+  function periodAdjustedLabel() {
+    if (ui.dashPeriod === "day") return "adjusted this day";
+    if (ui.dashPeriod === "week") return "adjusted this week";
+    return "adjusted this month";
   }
 
   function renderDashboard() {
     var range = currentDashRange();
     document.getElementById("dashPeriodLabel").textContent = range.label;
     document.getElementById("statPeriodLabel").textContent = periodStatLabel();
-    document.getElementById("statRedeemedLabel").textContent = periodRedeemedLabel();
+    document.getElementById("statAdjustedLabel").textContent = periodAdjustedLabel();
     document.getElementById("toggleDay").classList.toggle("active", ui.dashPeriod === "day");
     document.getElementById("toggleWeek").classList.toggle("active", ui.dashPeriod === "week");
     document.getElementById("toggleMonth").classList.toggle("active", ui.dashPeriod === "month");
 
     var periodTotal = 0;
-    var periodRedeemed = 0;
+    var periodAdjusted = 0;
     var perActivity = {};
     var idOrder = [];
     state.activities.forEach(function (a) {
@@ -491,12 +706,15 @@
           }
         });
       }
-      periodRedeemed += dayRedeemedPoints(dateStr);
+      periodAdjusted += dayAdjustmentTotal(dateStr);
       cursor = addDays(cursor, 1);
     }
 
     document.getElementById("statPeriodPoints").textContent = periodTotal;
-    document.getElementById("statRedeemedPoints").textContent = periodRedeemed;
+    var adjustedEl = document.getElementById("statAdjustedPoints");
+    adjustedEl.textContent = formatSigned(periodAdjusted);
+    adjustedEl.classList.remove("adj-pos", "adj-neg", "adj-zero");
+    adjustedEl.classList.add(signClass(periodAdjusted));
     document.getElementById("statTotalPoints").textContent = accumulatedAsOf(fmtDate(range.end));
 
     var listEl = document.getElementById("activityBreakdown");
@@ -533,18 +751,21 @@
       });
     }
 
-    // show the day's redemption (with its comment) in the activity breakdown, daily view only
+    // show each of the day's adjustments (with comment and time) in the activity breakdown, daily view only
     if (ui.dashPeriod === "day") {
-      var dayDateStr = fmtDate(range.start);
-      var redemption = getRedemption(dayDateStr);
-      if (redemption) {
-        var rItem = document.createElement("div");
-        rItem.className = "breakdown-item redeemed";
-        rItem.innerHTML =
-          '<div class="breakdown-top"><span>Redeemed</span><span class="breakdown-points">-' + redemption.points + ' pts</span></div>' +
-          (redemption.comment ? '<div class="breakdown-sub">' + escapeHtml(redemption.comment) + '</div>' : '');
-        listEl.appendChild(rItem);
-      }
+      adjustmentsForDate(fmtDate(range.start)).forEach(function (a) {
+        var aItem = document.createElement("div");
+        aItem.className = "breakdown-item adjusted-item";
+        var details = [];
+        if (a.comment) details.push(escapeHtml(a.comment));
+        var time = formatAdjustTime(a.ts);
+        if (time) details.push(time);
+        aItem.innerHTML =
+          '<div class="breakdown-top"><span>Adjusted · ' + (a.amount > 0 ? "Earned" : "Redeemed") + '</span>' +
+          '<span class="breakdown-points ' + signClass(a.amount) + '">' + formatSigned(a.amount) + ' pts</span></div>' +
+          (details.length ? '<div class="breakdown-sub">' + details.join(" · ") + '</div>' : '');
+        listEl.appendChild(aItem);
+      });
     }
 
     // by-day breakdown (hidden for the daily period itself)
@@ -566,14 +787,14 @@
       (function (d) {
         var dateStr = fmtDate(d);
         var pts = dayNetPoints(dateStr);
-        var redeemed = dayRedeemedPoints(dateStr);
+        var hasAdjust = adjustmentsForDate(dateStr).length > 0;
         var isToday = sameDate(d, today);
         var row = document.createElement("div");
         row.className = "day-breakdown-item" + (isToday ? " today" : "");
         row.innerHTML =
           '<div class="day-breakdown-date">' + WEEKDAY_NAMES[d.getDay()] +
           '<span class="sub">' + d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) +
-          (redeemed ? ' · -' + redeemed + ' redeemed' : '') + '</span></div>' +
+          (hasAdjust ? ' · adjusted ' + formatSigned(dayAdjustmentTotal(dateStr)) : '') + '</span></div>' +
           '<div class="day-breakdown-points' + (pts === 0 ? " zero" : "") + '">' + pts + ' pts</div>';
         row.addEventListener("click", function () {
           ui.dashPeriod = "day";
@@ -758,15 +979,24 @@
     reader.onload = function () {
       try {
         var parsed = JSON.parse(reader.result);
-        if (!parsed || !Array.isArray(parsed.activities) || typeof parsed.entries !== "object") {
+        if (!parsed || !Array.isArray(parsed.activities) || typeof parsed.entries !== "object" || parsed.entries === null) {
           throw new Error("bad shape");
         }
-        if (!Array.isArray(parsed.archivedActivities)) parsed.archivedActivities = [];
-        if (!parsed.redemptions || typeof parsed.redemptions !== "object") parsed.redemptions = {};
-        state = parsed;
-        saveState();
-        renderAll();
-        showMessage("Import complete", "Backup imported.");
+        // older backups have no rules: keep this device's current rules instead of wiping them
+        if (!Array.isArray(parsed.rules)) parsed.rules = state.rules.slice();
+        migrateState(parsed);
+        var dayCount = Object.keys(parsed.entries).length;
+        showConfirm(
+          "Replace current data?",
+          "The backup (" + parsed.activities.length + " activities, " + dayCount + " tracked days, " + parsed.adjustments.length + " adjustments, " + parsed.rules.length + " rules) will replace everything currently on this device.",
+          "Import",
+          function () {
+            state = parsed;
+            saveState();
+            renderAll();
+            showMessage("Import complete", "Backup imported.");
+          }
+        );
       } catch (e) {
         showMessage("Import failed", "That file doesn't look like a valid Simple Daily Task Tracker backup.");
       }
@@ -777,7 +1007,7 @@
   function handleReset() {
     showConfirm(
       "Reset all data?",
-      "This will erase all activities and tracked history on this device. This cannot be undone.",
+      "This will erase all activities, tracked history, adjustments and rules on this device. This cannot be undone.",
       "Reset",
       function () {
         state = defaultState();
@@ -790,7 +1020,7 @@
   // ---------------- view switching ----------------
   function switchView(view) {
     ui.view = view;
-    ["track", "dashboard", "settings"].forEach(function (v) {
+    ["track", "dashboard", "settings", "admin"].forEach(function (v) {
       document.getElementById("view-" + v).classList.toggle("hidden", v !== view);
     });
     document.querySelectorAll(".nav-btn").forEach(function (btn) {
@@ -803,6 +1033,7 @@
     if (ui.view === "track") renderTrack();
     else if (ui.view === "dashboard") renderDashboard();
     else if (ui.view === "settings") renderSettings();
+    else if (ui.view === "admin") renderAdmin();
   }
 
   // ---------------- event wiring ----------------
@@ -880,11 +1111,22 @@
   });
   document.getElementById("resetBtn").addEventListener("click", handleReset);
 
-  document.getElementById("saveRedeemBtn").addEventListener("click", handleSaveRedeem);
-  document.getElementById("clearRedeemBtn").addEventListener("click", handleClearRedeem);
-  document.getElementById("redeemModalCancelBtn").addEventListener("click", closeRedeemModal);
-  document.getElementById("redeemModalOverlay").addEventListener("click", function (e) {
-    if (e.target === this) closeRedeemModal();
+  document.getElementById("adjustEarnBtn").addEventListener("click", function () { chooseAdjustDirection("earn"); });
+  document.getElementById("adjustRedeemBtn").addEventListener("click", function () { chooseAdjustDirection("redeem"); });
+  document.getElementById("saveAdjustBtn").addEventListener("click", handleSaveAdjust);
+  document.getElementById("adjustModalCancelBtn").addEventListener("click", closeAdjustModal);
+  document.getElementById("adjustModalOverlay").addEventListener("click", function (e) {
+    if (e.target === this) closeAdjustModal();
+  });
+  document.getElementById("adjustCommentInput").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") handleSaveAdjust();
+  });
+
+  document.getElementById("addRulesBtn").addEventListener("click", openRulesModal);
+  document.getElementById("saveRulesBtn").addEventListener("click", handleSaveRules);
+  document.getElementById("rulesModalCancelBtn").addEventListener("click", closeRulesModal);
+  document.getElementById("rulesModalOverlay").addEventListener("click", function (e) {
+    if (e.target === this) closeRulesModal();
   });
 
   document.getElementById("confirmModalConfirmBtn").addEventListener("click", function () {

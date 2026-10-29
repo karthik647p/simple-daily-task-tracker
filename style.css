@@ -128,7 +128,7 @@ table#trackGrid {
   margin-top: 1px;
 }
 .points-row-label,
-.redeem-row-label,
+.adjust-row-label,
 .total-row-label {
   font-size: 12.5px;
   font-weight: 700;
@@ -147,31 +147,19 @@ table#trackGrid {
   font-size: 14px;
   color: var(--blue);
 }
-.redeem-row-label { color: #c0392b; }
-.redeem-row td.day-cell {
+.adjust-row-label { color: #7c3aed; }
+.adjust-row td.day-cell {
   cursor: pointer;
-  background: #fff1f1;
-  border-color: #ffd6d6;
+  background: #f5f0ff;
+  border-color: #e3d6ff;
   font-weight: 800;
   font-size: 13px;
-  color: #c0392b;
+  color: #7c3aed;
 }
-.redeem-row td.day-cell.has-redeem {
-  background: #ffd6d6;
-  border-color: #f5a3a3;
-}
-.redeem-row td.day-cell .dim { color: #d99; font-weight: 500; }
-.redeem-comment {
-  display: block;
-  font-size: 8.5px;
-  color: #8a2d2d;
-  line-height: 1.05;
-  margin-top: 1px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 0 2px;
-}
+.adjust-row td.day-cell .dim { color: #b9a3e8; font-weight: 500; }
+.adjust-row td.day-cell.adj-pos { background: #e3f7e8; border-color: #b6e4c2; color: #1e8e3e; }
+.adjust-row td.day-cell.adj-neg { background: #ffd6d6; border-color: #f5a3a3; color: #c0392b; }
+.adjust-row td.day-cell.adj-zero { background: #f0f1f4; border-color: #dfe3e8; color: var(--text-dim); }
 .total-row-label { color: var(--blue); font-weight: 800; }
 .total-row td.day-cell {
   cursor: default;
@@ -278,7 +266,9 @@ table#trackGrid {
   font-weight: 800;
   color: var(--blue);
 }
-.stat-card.redeemed .stat-value { color: #c0392b; }
+.stat-value.adj-pos { color: #1e8e3e; }
+.stat-value.adj-neg { color: #c0392b; }
+.stat-value.adj-zero { color: var(--text-dim); }
 .stat-label {
   font-size: 10.5px;
   color: var(--text-dim);
@@ -301,7 +291,8 @@ table#trackGrid {
   box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 .breakdown-item.archived { opacity: 0.65; }
-.breakdown-item.redeemed .breakdown-points { color: #c0392b; }
+.breakdown-points.adj-pos { color: #1e8e3e; }
+.breakdown-points.adj-neg { color: #c0392b; }
 .breakdown-top {
   display: flex;
   justify-content: space-between;
@@ -418,6 +409,8 @@ table#trackGrid {
   background: var(--card);
   width: 100%;
   max-width: 420px;
+  max-height: 92vh;
+  overflow-y: auto;
   border-radius: 18px 18px 0 0;
   padding: 20px 20px calc(20px + env(safe-area-inset-bottom, 0px));
 }
@@ -449,14 +442,60 @@ table#trackGrid {
 .field-label { margin-top: 14px; }
 #commentInput, #activityNameInput, #activityPointsInput,
 #activityStartInput, #activityEndInput,
-#redeemDateInput, #redeemPointsInput, #redeemCommentInput {
+#adjustPointsInput, #adjustCommentInput, #rulesTextarea {
   width: 100%;
   padding: 12px;
   border-radius: 10px;
   border: 1px solid var(--border);
   font-size: 15px;
   background: var(--bg);
+  font-family: inherit;
 }
+#rulesTextarea { resize: vertical; line-height: 1.4; margin-top: 8px; }
+.form-error {
+  color: #c0392b;
+  background: #fff0f0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.btn-done.dim, .btn-missed.dim { opacity: 0.4; }
+#adjustEarnBtn, #adjustRedeemBtn { font-size: 14px; }
+.adjust-history { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.adjust-history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.adjust-history-amount { font-weight: 800; min-width: 42px; }
+.adjust-history-amount.adj-pos { color: #1e8e3e; }
+.adjust-history-amount.adj-neg { color: #c0392b; }
+.adjust-history-meta { flex: 1; color: var(--text-dim); overflow-wrap: anywhere; }
+.adjust-history-remove {
+  border: none;
+  background: none;
+  color: var(--danger);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 2px;
+}
+
+/* ---- admin: rules ---- */
+.rules-list {
+  margin: 0 0 12px;
+  padding: 12px 14px 12px 36px;
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.rules-list li { padding: 6px 0; font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
 .time-row {
   display: flex;
   gap: 10px;

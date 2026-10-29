@@ -2,8 +2,8 @@ var CACHE_NAME = "simple-daily-task-tracker-v2";
 var CORE_ASSETS = [
   "./",
   "./index.html",
-  "./style.css",
-  "./app.js",
+  "./style.css?v=2",
+  "./app.js?v=2",
   "./manifest.json",
   "./icons/icon-192.png",
   "./icons/icon-512.png"
